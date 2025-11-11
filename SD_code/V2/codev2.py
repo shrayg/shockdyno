@@ -23,6 +23,11 @@ class SerialLogger:
         self.last_millis = ''  # holds the last millis value seen
         self.prev_time = None  # previous timestamp in seconds
         self.prev_pos = None   # previous position (linear pot)
+        
+        # Outlier-detection highpass filter
+        self.prev_velocity = None  # buffered previous velocity (output this on next write)
+        self.current_velocity = None  # current velocity (check against next)
+        self.outlier_threshold = 0.25  # 25% deviation from neighbor average
 
     def start(self):
         """Start the logging thread and open the CSV file."""
@@ -123,12 +128,30 @@ class SerialLogger:
                 parts.insert(3, f"{smoothed_velocity:.3f}" if smoothed_velocity != '' else '')
                 parts.insert(4, f"{velocity:.3f}")  # original velocity
 
-                # Highpass filter: remove velocity values over 25
-                try:
-                    velocity_val = float(velocity)
-                    highpass_velocity = f"{velocity_val:.3f}" if abs(velocity_val) <= 25 else ''
-                except Exception:
-                    highpass_velocity = ''
+                # Outlier-detection highpass filter (one-row buffer for detection)
+                # If current_velocity is outlier vs avg(previous, current), replace current with avg
+                highpass_velocity = ''
+                
+                if self.current_velocity is not None:
+                    # We have a buffered "current" that is now the "previous"
+                    # Check if buffered value is an outlier vs avg(buffered, new velocity)
+                    try:
+                        avg_neighbors = (self.current_velocity + velocity) / 2.0
+                        deviation = abs(self.current_velocity - avg_neighbors)
+                        max_deviation = abs(avg_neighbors) * self.outlier_threshold
+                        
+                        if deviation > max_deviation:
+                            # It's an outlier; replace with average
+                            highpass_velocity = f"{avg_neighbors:.3f}"
+                        else:
+                            # Normal value; use as-is
+                            highpass_velocity = f"{self.current_velocity:.3f}"
+                    except Exception:
+                        highpass_velocity = f"{self.current_velocity:.3f}"
+                
+                # Buffer the new velocity for next iteration
+                self.current_velocity = velocity
+                
                 parts.insert(5, highpass_velocity)
 
                 # Ensure we handle temperature value (should be last column from Arduino)
